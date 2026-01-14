@@ -1,13 +1,29 @@
 {
-  "name": "oddsengine-proxy",
+  "name": "oddsengine-railway-proxy",
   "version": "1.0.0",
-  "main": "proxy.js",
+  "description": "Railway proxy server for OddsEngine API with CORS and caching",
+  "main": "railway-proxy-server.js",
   "scripts": {
-    "start": "node proxy.js"
+    "start": "node railway-proxy-server.js",
+    "dev": "nodemon railway-proxy-server.js"
   },
+  "keywords": [
+    "oddsengine",
+    "proxy",
+    "railway",
+    "sports-betting"
+  ],
+  "author": "",
+  "license": "MIT",
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5",
     "node-fetch": "^2.7.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
