@@ -1,86 +1,73 @@
-// Railway Proxy Server for OddsEngine API
-// This proxy handles CORS, caching, and API key management
-
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
 
 const app = express();
-const PORT = process.env.PORT || 3001;
-
-// Configuration
+const PORT = process.env.PORT || 3001;  // Your port
 const ODDSENGINE_BASE_URL = 'https://api.oddsengine.dev';
-const API_KEY = process.env.ODDSENGINE_API_KEY; // Set this in Railway environment variables
+const API_KEY = process.env.ODDSENGINE_API_KEY;
 
-// Enable CORS for all origins (adjust for production)
-app.use(cors());
+// CRITICAL: Enable CORS for localhost
+app.use(cors({
+  origin: '*',  // Allow all origins (or specify 'http://localhost:8080')
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'X-API-Key']
+}));
+
 app.use(express.json());
 
-// Simple in-memory cache (use Redis for production)
+// Simple cache
 const cache = new Map();
-const CACHE_DURATION = 60 * 1000; // 1 minute
+const CACHE_DURATION = 60 * 1000;
 
-// Cache middleware
-function cacheMiddleware(duration) {
-  return (req, res, next) => {
-    const key = req.originalUrl;
-    const cachedResponse = cache.get(key);
-
-    if (cachedResponse && Date.now() - cachedResponse.timestamp < duration) {
-      console.log(`Cache HIT: ${key}`);
-      return res.json(cachedResponse.data);
-    }
-
-    console.log(`Cache MISS: ${key}`);
-    res.sendResponse = res.json;
-    res.json = (body) => {
-      cache.set(key, {
-        data: body,
-        timestamp: Date.now()
-      });
-      res.sendResponse(body);
-    };
-    next();
-  };
-}
-
-// Health check endpoint
+// Health check
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'healthy', 
     timestamp: new Date().toISOString(),
-    cache_size: cache.size
+    cache_size: cache.size,
+    port: PORT
   });
 });
 
-// Clear cache endpoint (useful for testing)
-app.post('/cache/clear', (req, res) => {
-  cache.clear();
-  res.json({ message: 'Cache cleared', size: cache.size });
-});
-
-// Proxy endpoint for OddsEngine API
-app.get('/v1/*', cacheMiddleware(CACHE_DURATION), async (req, res) => {
+// Proxy all /v1/* routes
+app.get('/v1/*', async (req, res) => {
   try {
-    // Get the path and query string
-    const path = req.path; // e.g., /v1/events
+    const path = req.path;
     const queryString = new URLSearchParams(req.query).toString();
     const url = `${ODDSENGINE_BASE_URL}${path}${queryString ? '?' + queryString : ''}`;
 
-    console.log(`Proxying request to: ${url}`);
+    console.log(`Proxying: ${url}`);
 
-    // Forward request to OddsEngine with API key
+    // Check cache
+    const cacheKey = url;
+    const cached = cache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
+      console.log('✅ Cache HIT');
+      return res.json(cached.data);
+    }
+
+    // Get API key from header or env
+    const apiKey = req.headers['x-api-key'] || API_KEY;
+    
+    if (!apiKey) {
+      return res.status(401).json({
+        error: 'missing_api_key',
+        message: 'API key required via X-API-Key header or env var'
+      });
+    }
+
+    // Forward to OddsEngine
     const response = await fetch(url, {
-      method: 'GET',
       headers: {
-        'X-API-Key': API_KEY,
+        'X-API-Key': apiKey,
         'Content-Type': 'application/json'
       }
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`OddsEngine API Error: ${response.status} - ${errorText}`);
+      console.error(`❌ OddsEngine error: ${response.status}`);
       return res.status(response.status).json({
         error: 'api_error',
         message: errorText,
@@ -90,14 +77,14 @@ app.get('/v1/*', cacheMiddleware(CACHE_DURATION), async (req, res) => {
 
     const data = await response.json();
     
-    // Add cache headers
-    res.set('X-Cache', 'MISS');
-    res.set('X-Cache-Duration', `${CACHE_DURATION}ms`);
+    // Cache it
+    cache.set(cacheKey, { data, timestamp: Date.now() });
+    console.log('📝 Cache MISS - stored');
     
     res.json(data);
 
   } catch (error) {
-    console.error('Proxy error:', error);
+    console.error('❌ Proxy error:', error);
     res.status(500).json({
       error: 'proxy_error',
       message: error.message
@@ -105,27 +92,21 @@ app.get('/v1/*', cacheMiddleware(CACHE_DURATION), async (req, res) => {
   }
 });
 
-// Rate limit info endpoint
-app.get('/rate-limit', (req, res) => {
-  // In a real implementation, track rate limits from OddsEngine headers
-  res.json({
-    message: 'Rate limit info would be tracked from OddsEngine API headers',
-    limit: 200,
-    window: '1 minute'
-  });
+// Clear cache endpoint
+app.post('/cache/clear', (req, res) => {
+  cache.clear();
+  res.json({ message: 'Cache cleared', size: 0 });
 });
 
-// Start server
 app.listen(PORT, () => {
-  console.log(`🚀 Railway Proxy Server running on port ${PORT}`);
-  console.log(`📡 Proxying to: ${ODDSENGINE_BASE_URL}`);
-  console.log(`🔑 API Key configured: ${API_KEY ? 'Yes' : 'No (WARNING!)'}`);
-  console.log(`💾 Cache duration: ${CACHE_DURATION}ms`);
+  console.log(`\n🚀 Railway Proxy Server`);
+  console.log(`📡 Running on: http://localhost:${PORT}`);
+  console.log(`🔑 API Key: ${API_KEY ? '✅ Configured' : '❌ Missing'}`);
+  console.log(`💾 Cache: ${CACHE_DURATION}ms duration\n`);
 });
 
-// Graceful shutdown
 process.on('SIGTERM', () => {
-  console.log('SIGTERM received, shutting down gracefully');
+  console.log('Shutting down gracefully...');
   cache.clear();
   process.exit(0);
 });
